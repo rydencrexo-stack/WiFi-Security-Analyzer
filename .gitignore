@@ -1,0 +1,7 @@
+wifi_baseline.json
+wifi_report.csv
+wifi_report.json
+wifi_report.html
+wifi_security.db
+__pycache__/
+*.pyc
