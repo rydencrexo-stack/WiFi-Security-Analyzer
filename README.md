@@ -30,7 +30,7 @@ Security Reports
 
 ```
 
-### 3. Risk Levels
+### Risk Levels
 
 ```markdown
 ## 🚦 Risk Levels
@@ -90,19 +90,15 @@ These generated files are excluded from GitHub using `.gitignore`.
 ```
 
 
-### 6. Screenshots
-
-This makes the GitHub page look much better once you have screenshots:
-
 ## 🖼️ Screenshots
 
-### Wi-Fi Network Scan
+### Wi-Fi Security Analyzer
 
-```markdown
+![Wi-Fi Security Analyzer](screenshots/Wifi_Scanner.png)
 
-(screenshots/Wifi_Scanner.png)
+### Security Summary
 
-```
+The analyzer provides a quick overview of discovered networks, risk levels, authentication types, and average signal strength.
 
 ## ⚠️ Disclaimer
 
