@@ -96,12 +96,14 @@ This makes the GitHub page look much better once you have screenshots:
 
 ## 🖼️ Screenshots
 
-```markdown
-
-
 ### Wi-Fi Network Scan
 
-_Add screenshot here_
+```markdown
+
+![Wi-Fi Security Analyzer - Security Summary](screenshots/Wifi_Scanner.png)
+
+
+
 ```
 
 ## ⚠️ Disclaimer
