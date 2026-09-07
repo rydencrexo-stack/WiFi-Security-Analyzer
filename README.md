@@ -112,3 +112,10 @@ Only scan networks that you own or have explicit permission to assess.
 
 The author is not responsible for misuse, unauthorized monitoring, or any activity performed outside the scope of authorization.
 
+## 👨‍💻 Author
+
+**Atharva Deshmukh**
+
+Cybersecurity Engineer | Developer
+
+GitHub: https://github.com/rydencrexo-stack
