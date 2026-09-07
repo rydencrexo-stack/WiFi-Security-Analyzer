@@ -94,8 +94,10 @@ These generated files are excluded from GitHub using `.gitignore`.
 
 This makes the GitHub page look much better once you have screenshots:
 
-```markdown
 ## 🖼️ Screenshots
+
+```markdown
+
 
 ### Wi-Fi Network Scan
 
