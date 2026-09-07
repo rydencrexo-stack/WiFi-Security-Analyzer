@@ -2,60 +2,66 @@ import subprocess
 import re
 import json
 import csv
+import sqlite3
 import os
+import time
 from datetime import datetime
 from collections import Counter
 
 
-
-# Wi-Fi Security Analyzer
-# Windows + Python
-# Defensive / Authorized Network Assessment Tool
-
-
-
+DB_FILE = "wifi_security.db"
 BASELINE_FILE = "wifi_baseline.json"
-JSON_REPORT = "wifi_report.json"
-CSV_REPORT = "wifi_report.csv"
+JSON_FILE = "wifi_report.json"
+CSV_FILE = "wifi_report.csv"
+HTML_FILE = "wifi_report.html"
 
 
-
-# COLORS
-
-
-GREEN = "\033[92m"
+RESET = "\033[0m"
 RED = "\033[91m"
+GREEN = "\033[92m"
 YELLOW = "\033[93m"
 CYAN = "\033[96m"
 BLUE = "\033[94m"
+MAGENTA = "\033[95m"
 WHITE = "\033[97m"
-RESET = "\033[0m"
 
 
-
-# UTILITY FUNCTIONS
-
-
-def clear_screen():
-    os.system("cls")
+def clear():
+    os.system("cls" if os.name == "nt" else "clear")
 
 
-def print_header():
-    print(CYAN + "=" * 75)
+def header():
+    print(CYAN + "=" * 80)
     print("                 WI-FI SECURITY ANALYZER")
-    print("=" * 75 + RESET)
-    print("Defensive Wi-Fi visibility and security assessment tool")
-    print()
+    print("=" * 80 + RESET)
 
 
-def get_signal_value(signal):
-    """
-    Convert signal like '92%' into integer 92.
-    """
-    if not signal:
-        return 0
+def db_init():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
 
-    match = re.search(r"(\d+)", signal)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            ssid TEXT,
+            bssid TEXT,
+            authentication TEXT,
+            encryption TEXT,
+            signal INTEGER,
+            channel TEXT,
+            radio TEXT,
+            risk_score INTEGER,
+            risk TEXT
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+def signal_value(value):
+    match = re.search(r"(\d+)", str(value))
 
     if match:
         return int(match.group(1))
@@ -63,33 +69,18 @@ def get_signal_value(signal):
     return 0
 
 
-def risk_color(risk):
-    if risk == "HIGH":
+def risk_color(value):
+    if value == "HIGH":
         return RED
-    elif risk == "MEDIUM":
+    if value == "MEDIUM":
         return YELLOW
-    else:
-        return GREEN
+    return GREEN
 
 
-
-# RUN WINDOWS NETSH
-
-
-def run_wifi_scan():
-
-    command = [
-        "netsh",
-        "wlan",
-        "show",
-        "networks",
-        "mode=bssid"
-    ]
-
+def run_netsh():
     try:
-
         result = subprocess.run(
-            command,
+            ["netsh", "wlan", "show", "networks", "mode=bssid"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -97,619 +88,469 @@ def run_wifi_scan():
         )
 
         if result.returncode != 0:
-            print(RED + "\n[-] Unable to run netsh." + RESET)
-            return []
+            return ""
 
-        return parse_netsh_output(result.stdout)
+        return result.stdout
 
-    except FileNotFoundError:
-
-        print(
-            RED +
-            "\n[-] netsh was not found."
-            "\nThis program requires Windows."
-            + RESET
-        )
-
-        return []
-
-    except Exception as e:
-
-        print(RED + f"\n[-] Scan error: {e}" + RESET)
-
-        return []
+    except Exception:
+        return ""
 
 
-
-# PARSE NETSH OUTPUT
-
-
-def parse_netsh_output(output):
-
+def parse_wifi(output):
     networks = []
+    current = None
+    bssid = None
 
-    current_network = None
-    current_bssid = None
-
-    for raw_line in output.splitlines():
-
-        line = raw_line.strip()
-
-       
-        # SSID
-       
+    for raw in output.splitlines():
+        line = raw.strip()
 
         if line.startswith("SSID ") and ":" in line:
+            if bssid and current:
+                current["bssids"].append(bssid)
+                bssid = None
 
-            # Save previous BSSID
-            if current_bssid and current_network:
+            if current:
+                networks.append(current)
 
-                current_network["bssids"].append(current_bssid)
-                current_bssid = None
-
-            # Save previous network
-            if current_network:
-
-                networks.append(current_network)
-
-            ssid = line.split(":", 1)[1].strip()
-
-            current_network = {
-                "ssid": ssid,
+            current = {
+                "ssid": line.split(":", 1)[1].strip(),
                 "authentication": "Unknown",
                 "encryption": "Unknown",
                 "signal": "Unknown",
                 "channel": "Unknown",
-                "radio_type": "Unknown",
+                "radio": "Unknown",
                 "bssids": []
             }
 
-       
-        # Authentication
-       
-
         elif line.startswith("Authentication") and ":" in line:
-
-            if current_network:
-
-                current_network["authentication"] = (
-                    line.split(":", 1)[1].strip()
-                )
-
-       
-        # Encryption
-       
+            if current:
+                current["authentication"] = line.split(":", 1)[1].strip()
 
         elif line.startswith("Encryption") and ":" in line:
-
-            if current_network:
-
-                current_network["encryption"] = (
-                    line.split(":", 1)[1].strip()
-                )
-
-       
-        # BSSID
-       
+            if current:
+                current["encryption"] = line.split(":", 1)[1].strip()
 
         elif line.startswith("BSSID") and ":" in line:
+            if bssid and current:
+                current["bssids"].append(bssid)
 
-            if current_bssid and current_network:
-
-                current_network["bssids"].append(current_bssid)
-
-            bssid = line.split(":", 1)[1].strip()
-
-            current_bssid = {
-                "bssid": bssid,
+            bssid = {
+                "bssid": line.split(":", 1)[1].strip(),
                 "signal": "Unknown",
                 "channel": "Unknown",
-                "radio_type": "Unknown"
+                "radio": "Unknown"
             }
 
-       
-        # Signal
-       
-
         elif line.startswith("Signal") and ":" in line:
-
             value = line.split(":", 1)[1].strip()
 
-            if current_bssid:
-
-                current_bssid["signal"] = value
-
-            elif current_network:
-
-                current_network["signal"] = value
-
-       
-        # Channel
-       
+            if bssid:
+                bssid["signal"] = value
+            elif current:
+                current["signal"] = value
 
         elif line.startswith("Channel") and ":" in line:
-
             value = line.split(":", 1)[1].strip()
 
-            if current_bssid:
-
-                current_bssid["channel"] = value
-
-            elif current_network:
-
-                current_network["channel"] = value
-
-       
-        # Radio type
-       
+            if bssid:
+                bssid["channel"] = value
+            elif current:
+                current["channel"] = value
 
         elif line.startswith("Radio type") and ":" in line:
-
             value = line.split(":", 1)[1].strip()
 
-            if current_bssid:
+            if bssid:
+                bssid["radio"] = value
+            elif current:
+                current["radio"] = value
 
-                current_bssid["radio_type"] = value
+    if bssid and current:
+        current["bssids"].append(bssid)
 
-            elif current_network:
-
-                current_network["radio_type"] = value
-
-    
-    # Save final BSSID/network
-    
-
-    if current_bssid and current_network:
-
-        current_network["bssids"].append(current_bssid)
-
-    if current_network:
-
-        networks.append(current_network)
-
-    
-    # Flatten useful BSSID information
-    
+    if current:
+        networks.append(current)
 
     for network in networks:
-
         if network["bssids"]:
-
             strongest = max(
                 network["bssids"],
-                key=lambda x: get_signal_value(x["signal"])
+                key=lambda x: signal_value(x["signal"])
             )
 
             network["signal"] = strongest["signal"]
             network["channel"] = strongest["channel"]
-            network["radio_type"] = strongest["radio_type"]
+            network["radio"] = strongest["radio"]
 
     return networks
 
 
-
-# SECURITY ANALYSIS
-
-
-def analyze_security(network):
-
-    authentication = network["authentication"].lower()
+def security_analysis(network):
+    auth = network["authentication"].lower()
     encryption = network["encryption"].lower()
 
     score = 0
     reasons = []
     recommendations = []
 
-    
-    # OPEN NETWORK
-    
+    if auth in ("open", ""):
+        score += 75
+        reasons.append("Open or unauthenticated wireless network.")
+        recommendations.append("Enable WPA2 or WPA3 security.")
 
-    if authentication in ["open", ""]:
-        score += 70
+    elif "wep" in auth or "wep" in encryption:
+        score += 95
+        reasons.append("WEP detected.")
+        recommendations.append("Replace WEP immediately with WPA2 or WPA3.")
 
-        reasons.append("No Wi-Fi authentication detected.")
-
-        recommendations.append(
-            "Use WPA2-Personal or WPA3-Personal instead of an open network."
-        )
-
-    
-    # WEP
-    
-
-    elif "wep" in authentication or "wep" in encryption:
-
-        score += 90
-
-        reasons.append(
-            "WEP is obsolete and should not be used."
-        )
-
-        recommendations.append(
-            "Replace WEP with WPA2 or WPA3."
-        )
-
-    
-    # WPA
-    
-
-    elif authentication == "wpa-personal":
-
+    elif auth == "wpa-personal":
         score += 60
+        reasons.append("Legacy WPA authentication detected.")
+        recommendations.append("Upgrade to WPA2 or WPA3.")
 
-        reasons.append(
-            "Legacy WPA authentication detected."
-        )
-
-        recommendations.append(
-            "Upgrade legacy WPA to WPA2 or WPA3 where possible."
-        )
-
-    
-    # WPA2
-    
-
-    elif "wpa2" in authentication:
-
+    elif "wpa2" in auth:
         score += 15
+        reasons.append("WPA2 detected.")
+        recommendations.append("Use a long and unique Wi-Fi passphrase.")
 
-        reasons.append(
-            "WPA2 authentication detected."
-        )
-
-        recommendations.append(
-            "Use a strong unique Wi-Fi passphrase."
-        )
-
-    
-    # WPA3
-    
-
-    elif "wpa3" in authentication:
-
+    elif "wpa3" in auth:
         score += 5
+        reasons.append("WPA3 detected.")
+        recommendations.append("Keep AP firmware updated.")
 
-        reasons.append(
-            "WPA3 authentication detected."
-        )
+    else:
+        score += 30
+        reasons.append("Authentication type could not be confidently classified.")
+        recommendations.append("Verify the wireless security configuration.")
 
+    signal = signal_value(network["signal"])
+
+    if signal >= 85:
         recommendations.append(
-            "Keep router firmware updated and use a strong passphrase."
+            "Strong nearby signal detected; verify that the AP is authorized."
         )
 
-    
-    # ENTERPRISE
-    
-
-    if "enterprise" in authentication:
-
-        recommendations.append(
-            "Use certificate-based enterprise authentication where appropriate."
-        )
-
-    
-    # SIGNAL ANALYSIS
-    
-
-    signal = get_signal_value(network["signal"])
-
-    if signal >= 80:
-
-        recommendations.append(
-            "Strong nearby signal detected; ensure this is an authorized access point."
-        )
-
-    elif signal <= 30 and signal > 0:
-
+    if signal <= 25 and signal > 0:
         recommendations.append(
             "Weak signal detected; verify AP placement if this is your network."
         )
 
-    
-    # FINAL RISK
-    
+    if len(network["bssids"]) > 3:
+        recommendations.append(
+            "Multiple BSSIDs detected for this SSID; verify expected AP deployment."
+        )
 
     if score >= 60:
-
         risk = "HIGH"
-
     elif score >= 20:
-
         risk = "MEDIUM"
-
     else:
-
         risk = "LOW"
 
-    network["risk_score"] = score
+    network["risk_score"] = min(score, 100)
     network["risk"] = risk
-    network["risk_reasons"] = reasons
+    network["reasons"] = reasons
     network["recommendations"] = recommendations
 
     return network
 
 
+def scan():
+    print(CYAN + "\n[*] Scanning wireless networks..." + RESET)
 
-# ANALYZE ALL NETWORKS
+    output = run_netsh()
 
+    if not output:
+        print(RED + "[-] Unable to perform Wi-Fi scan." + RESET)
+        return []
 
-def analyze_networks(networks):
+    networks = parse_wifi(output)
 
     for network in networks:
+        security_analysis(network)
 
-        analyze_security(network)
+    save_history(networks)
+
+    print(
+        GREEN +
+        f"[+] {len(networks)} networks discovered."
+        + RESET
+    )
 
     return networks
 
 
+def save_history(networks):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
 
-# CHANNEL ANALYSIS
-
-
-def analyze_channels(networks):
-
-    channels = []
+    timestamp = datetime.now().isoformat(timespec="seconds")
 
     for network in networks:
+        for bssid in network["bssids"]:
 
-        channel = network.get("channel", "Unknown")
+            cur.execute("""
+                INSERT INTO scans (
+                    timestamp,
+                    ssid,
+                    bssid,
+                    authentication,
+                    encryption,
+                    signal,
+                    channel,
+                    radio,
+                    risk_score,
+                    risk
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                timestamp,
+                network["ssid"],
+                bssid["bssid"],
+                network["authentication"],
+                network["encryption"],
+                signal_value(bssid["signal"]),
+                bssid["channel"],
+                bssid["radio"],
+                network["risk_score"],
+                network["risk"]
+            ))
 
-        if channel != "Unknown":
-
-            try:
-                channels.append(int(channel))
-            except ValueError:
-                pass
-
-    counter = Counter(channels)
-
-    return counter
-
-
-def print_channel_analysis(networks):
-
-    print("\n" + CYAN + "=" * 75)
-    print("CHANNEL ANALYSIS")
-    print("=" * 75 + RESET)
-
-    counter = analyze_channels(networks)
-
-    if not counter:
-
-        print("No channel information available.")
-
-        return
-
-    for channel, count in sorted(counter.items()):
-
-        bar = "█" * count
-
-        if count >= 5:
-
-            status = "HIGH CONGESTION"
-
-        elif count >= 3:
-
-            status = "MODERATE"
-
-        else:
-
-            status = "LOW"
-
-        print(
-            f"Channel {channel:<4} "
-            f"{bar:<15} "
-            f"{count} network(s) - {status}"
-        )
-
-    least_used = min(counter, key=counter.get)
-
-    print(
-        f"\n{GREEN}[+] Least observed channel: "
-        f"{least_used} ({counter[least_used]} network(s)){RESET}"
-    )
-
-
-
-# DISPLAY NETWORKS
+    conn.commit()
+    conn.close()
 
 
 def display_networks(networks):
-
-    print("\n" + CYAN + "=" * 75)
-    print("DISCOVERED WI-FI NETWORKS")
-    print("=" * 75 + RESET)
-
     if not networks:
-
-        print(RED + "No networks detected." + RESET)
-
+        print(YELLOW + "\nNo scan data available." + RESET)
         return
 
-    for index, network in enumerate(networks, 1):
+    print("\n" + CYAN + "=" * 100)
+    print(
+        f"{'#':<4}"
+        f"{'SSID':<25}"
+        f"{'Security':<20}"
+        f"{'Signal':<10}"
+        f"{'Channel':<10}"
+        f"{'Risk':<12}"
+    )
+    print("=" * 100 + RESET)
 
-        risk = network["risk"]
+    for i, network in enumerate(networks, 1):
 
-        print(
-            f"\n[{index}] "
-            f"{WHITE}{network['ssid']}{RESET}"
-        )
-
-        print(
-            f"    Security    : "
-            f"{network['authentication']}"
-        )
-
-        print(
-            f"    Encryption  : "
-            f"{network['encryption']}"
-        )
+        ssid = network["ssid"][:23]
 
         print(
-            f"    Signal      : "
-            f"{network['signal']}"
-        )
-
-        print(
-            f"    Channel     : "
-            f"{network['channel']}"
-        )
-
-        print(
-            f"    Radio       : "
-            f"{network['radio_type']}"
-        )
-
-        print(
-            f"    BSSIDs      : "
-            f"{len(network['bssids'])}"
-        )
-
-        print(
-            f"    Risk Score  : "
-            f"{network['risk_score']}/100"
-        )
-
-        print(
-            f"    Risk        : "
-            f"{risk_color(risk)}{risk}{RESET}"
+            f"{i:<4}"
+            f"{ssid:<25}"
+            f"{network['authentication'][:18]:<20}"
+            f"{network['signal']:<10}"
+            f"{network['channel']:<10}"
+            f"{risk_color(network['risk'])}"
+            f"{network['risk']} "
+            f"({network['risk_score']})"
+            f"{RESET}"
         )
 
 
-
-# DETAILED NETWORK INFORMATION
-
-
-def show_network_details(networks):
-
+def details(networks):
     if not networks:
-
-        print("No networks available.")
-
+        print(YELLOW + "Perform a scan first." + RESET)
         return
+
+    display_networks(networks)
 
     try:
+        number = int(input("\nSelect network: "))
 
-        choice = int(
-            input("\nEnter network number: ")
-        )
-
-        if choice < 1 or choice > len(networks):
-
+        if number < 1 or number > len(networks):
             print(RED + "Invalid selection." + RESET)
-
             return
 
     except ValueError:
-
         print(RED + "Invalid input." + RESET)
-
         return
 
-    network = networks[choice - 1]
+    network = networks[number - 1]
 
-    print("\n" + CYAN + "=" * 75)
-    print("DETAILED SECURITY ASSESSMENT")
-    print("=" * 75 + RESET)
+    print("\n" + CYAN + "=" * 80)
+    print("SECURITY ASSESSMENT")
+    print("=" * 80 + RESET)
 
-    print(f"\nSSID: {network['ssid']}")
-
+    print(f"\nSSID          : {network['ssid']}")
+    print(f"Authentication: {network['authentication']}")
+    print(f"Encryption    : {network['encryption']}")
+    print(f"Signal        : {network['signal']}")
+    print(f"Channel       : {network['channel']}")
+    print(f"Radio         : {network['radio']}")
+    print(f"BSSID Count   : {len(network['bssids'])}")
     print(
-        f"Authentication: "
-        f"{network['authentication']}"
-    )
-
-    print(
-        f"Encryption: "
-        f"{network['encryption']}"
-    )
-
-    print(
-        f"Signal: "
-        f"{network['signal']}"
-    )
-
-    print(
-        f"Channel: "
-        f"{network['channel']}"
-    )
-
-    print(
-        f"Radio Type: "
-        f"{network['radio_type']}"
-    )
-
-    print(
-        f"Risk Score: "
+        f"Risk Score    : "
         f"{network['risk_score']}/100"
     )
-
     print(
-        f"Risk Level: "
+        f"Risk          : "
         f"{risk_color(network['risk'])}"
         f"{network['risk']}"
         f"{RESET}"
     )
 
-    print("\n" + YELLOW + "Risk Reasons:" + RESET)
+    print("\n" + RED + "Findings" + RESET)
 
-    for reason in network["risk_reasons"]:
+    for reason in network["reasons"]:
+        print(f"  ! {reason}")
 
-        print(f"  ⚠ {reason}")
-
-    print("\n" + GREEN + "Recommendations:" + RESET)
+    print("\n" + GREEN + "Recommendations" + RESET)
 
     for recommendation in network["recommendations"]:
+        print(f"  + {recommendation}")
 
-        print(f"  ✓ {recommendation}")
+    print("\n" + BLUE + "BSSIDs" + RESET)
 
-    print("\nBSSIDs:")
-
-    if network["bssids"]:
-
-        for bssid in network["bssids"]:
-
-            print(
-                f"  {bssid['bssid']} | "
-                f"Signal: {bssid['signal']} | "
-                f"Channel: {bssid['channel']} | "
-                f"Radio: {bssid['radio_type']}"
-            )
-
-    else:
-
-        print("  No BSSID information available.")
+    for item in network["bssids"]:
+        print(
+            f"  {item['bssid']:<20}"
+            f"Signal: {item['signal']:<8}"
+            f"Channel: {item['channel']:<8}"
+            f"Radio: {item['radio']}"
+        )
 
 
+def channel_analysis(networks):
+    if not networks:
+        print(YELLOW + "Perform a scan first." + RESET)
+        return
 
-# BASELINE
+    counter = Counter()
+
+    for network in networks:
+        channel = network["channel"]
+
+        try:
+            counter[int(channel)] += 1
+        except ValueError:
+            pass
+
+    print("\n" + CYAN + "=" * 70)
+    print("CHANNEL CONGESTION")
+    print("=" * 70 + RESET)
+
+    if not counter:
+        print("Channel information unavailable.")
+        return
+
+    for channel, count in sorted(counter.items()):
+
+        bar = "█" * min(count, 30)
+
+        if count >= 6:
+            status = RED + "HIGH" + RESET
+        elif count >= 3:
+            status = YELLOW + "MEDIUM" + RESET
+        else:
+            status = GREEN + "LOW" + RESET
+
+        print(
+            f"Channel {channel:<4} "
+            f"{bar:<30} "
+            f"{count:<3} "
+            f"{status}"
+        )
+
+    best = min(counter, key=counter.get)
+
+    print(
+        f"\n{GREEN}[+] Least observed channel: "
+        f"{best}{RESET}"
+    )
 
 
-def create_baseline(networks):
+def summary(networks):
+    if not networks:
+        print(YELLOW + "Perform a scan first." + RESET)
+        return
 
-    baseline = []
+    high = sum(n["risk"] == "HIGH" for n in networks)
+    medium = sum(n["risk"] == "MEDIUM" for n in networks)
+    low = sum(n["risk"] == "LOW" for n in networks)
+
+    open_count = sum(
+        n["authentication"].lower() == "open"
+        for n in networks
+    )
+
+    wep_count = sum(
+        "wep" in n["authentication"].lower()
+        for n in networks
+    )
+
+    wpa2_count = sum(
+        "wpa2" in n["authentication"].lower()
+        for n in networks
+    )
+
+    wpa3_count = sum(
+        "wpa3" in n["authentication"].lower()
+        for n in networks
+    )
+
+    average_signal = round(
+        sum(signal_value(n["signal"]) for n in networks) /
+        len(networks)
+    )
+
+    print("\n" + CYAN + "=" * 70)
+    print("SECURITY SUMMARY")
+    print("=" * 70 + RESET)
+
+    print(f"\nNetworks discovered : {len(networks)}")
+    print(f"High risk           : {RED}{high}{RESET}")
+    print(f"Medium risk         : {YELLOW}{medium}{RESET}")
+    print(f"Low risk            : {GREEN}{low}{RESET}")
+    print(f"Open networks       : {RED}{open_count}{RESET}")
+    print(f"WEP networks        : {RED}{wep_count}{RESET}")
+    print(f"WPA2 networks       : {wpa2_count}")
+    print(f"WPA3 networks       : {wpa3_count}")
+    print(f"Average signal      : {average_signal}%")
+
+    if high > 0:
+        print(
+            RED +
+            "\n[!] High-risk wireless networks detected."
+            + RESET
+        )
+
+    if open_count > 0:
+        print(
+            YELLOW +
+            "[!] Open wireless networks detected."
+            + RESET
+        )
+
+
+def baseline_create(networks):
+    if not networks:
+        print(YELLOW + "Perform a scan first." + RESET)
+        return
+
+    baseline = {}
 
     for network in networks:
 
-        entry = {
-            "ssid": network["ssid"],
+        baseline[network["ssid"]] = {
             "authentication": network["authentication"],
             "encryption": network["encryption"],
-            "channel": network["channel"],
             "bssids": [
-                b["bssid"]
-                for b in network["bssids"]
+                item["bssid"]
+                for item in network["bssids"]
             ]
         }
-
-        baseline.append(entry)
 
     with open(
         BASELINE_FILE,
         "w",
         encoding="utf-8"
     ) as file:
-
         json.dump(
             baseline,
             file,
@@ -723,21 +564,13 @@ def create_baseline(networks):
     )
 
 
-
-# COMPARE BASELINE
-
-
-def compare_baseline(networks):
-
+def baseline_compare(networks):
     if not os.path.exists(BASELINE_FILE):
-
         print(
             YELLOW +
-            "\n[!] No baseline exists."
-            "\nCreate one first using option 5."
+            "No baseline exists. Create one first."
             + RESET
         )
-
         return
 
     with open(
@@ -745,91 +578,97 @@ def compare_baseline(networks):
         "r",
         encoding="utf-8"
     ) as file:
-
         baseline = json.load(file)
 
-    old_ssids = {
-        item["ssid"]
-        for item in baseline
+    current = {
+        n["ssid"]: n
+        for n in networks
     }
 
-    current_ssids = {
-        item["ssid"]
-        for item in networks
-    }
+    baseline_ssids = set(baseline)
+    current_ssids = set(current)
 
-    new_networks = current_ssids - old_ssids
+    new_ssids = current_ssids - baseline_ssids
+    missing_ssids = baseline_ssids - current_ssids
 
-    missing_networks = old_ssids - current_ssids
+    print("\n" + CYAN + "=" * 70)
+    print("BASELINE COMPARISON")
+    print("=" * 70 + RESET)
 
-    print("\n" + CYAN + "=" * 75)
-    print("BASELINE CHANGE DETECTION")
-    print("=" * 75 + RESET)
+    if new_ssids:
+        print("\n" + RED + "NEW NETWORKS" + RESET)
 
-    if new_networks:
-
-        print(
-            YELLOW +
-            "\n⚠ NEW NETWORKS DETECTED:"
-            + RESET
-        )
-
-        for ssid in new_networks:
-
+        for ssid in sorted(new_ssids):
             print(f"  + {ssid}")
 
     else:
-
         print(
             GREEN +
             "\n✓ No new SSIDs detected."
             + RESET
         )
 
-    if missing_networks:
+    if missing_ssids:
+        print("\n" + YELLOW + "MISSING NETWORKS" + RESET)
 
+        for ssid in sorted(missing_ssids):
+            print(f"  - {ssid}")
+
+    else:
         print(
-            YELLOW +
-            "\n⚠ NETWORKS NO LONGER VISIBLE:"
+            GREEN +
+            "✓ No baseline SSIDs disappeared."
             + RESET
         )
 
-        for ssid in missing_networks:
+    changed = []
 
-            print(f"  - {ssid}")
+    for ssid in baseline_ssids & current_ssids:
+
+        old = baseline[ssid]
+        new = current[ssid]
+
+        if (
+            old["authentication"] !=
+            new["authentication"]
+            or old["encryption"] !=
+            new["encryption"]
+        ):
+            changed.append(ssid)
+
+    if changed:
+
+        print("\n" + RED + "SECURITY CHANGES" + RESET)
+
+        for ssid in changed:
+            print(f"  ! {ssid}")
 
     else:
 
         print(
             GREEN +
-            "\n✓ No baseline SSIDs disappeared."
+            "✓ No authentication/encryption changes detected."
             + RESET
         )
 
 
-
-# EXPORT JSON
-
-
 def export_json(networks):
+    if not networks:
+        print(YELLOW + "Perform a scan first." + RESET)
+        return
 
     report = {
-
         "tool": "Wi-Fi Security Analyzer",
-
-        "scan_time": datetime.now().isoformat(),
-
+        "generated": datetime.now().isoformat(),
         "network_count": len(networks),
-
         "networks": networks
     }
 
     with open(
-        JSON_REPORT,
+        JSON_FILE,
         "w",
         encoding="utf-8"
     ) as file:
-
         json.dump(
             report,
             file,
@@ -838,19 +677,18 @@ def export_json(networks):
 
     print(
         GREEN +
-        f"\n[+] JSON report created: {JSON_REPORT}"
+        f"\n[+] Created {JSON_FILE}"
         + RESET
     )
 
 
-
-# EXPORT CSV
-
-
 def export_csv(networks):
+    if not networks:
+        print(YELLOW + "Perform a scan first." + RESET)
+        return
 
     with open(
-        CSV_REPORT,
+        CSV_FILE,
         "w",
         newline="",
         encoding="utf-8"
@@ -860,301 +698,469 @@ def export_csv(networks):
 
         writer.writerow([
             "SSID",
+            "BSSID",
             "Authentication",
             "Encryption",
             "Signal",
             "Channel",
-            "Radio Type",
-            "BSSID Count",
+            "Radio",
             "Risk Score",
             "Risk"
         ])
 
         for network in networks:
 
-            writer.writerow([
-                network["ssid"],
-                network["authentication"],
-                network["encryption"],
-                network["signal"],
-                network["channel"],
-                network["radio_type"],
-                len(network["bssids"]),
-                network["risk_score"],
-                network["risk"]
-            ])
+            if network["bssids"]:
+
+                for item in network["bssids"]:
+
+                    writer.writerow([
+                        network["ssid"],
+                        item["bssid"],
+                        network["authentication"],
+                        network["encryption"],
+                        signal_value(item["signal"]),
+                        item["channel"],
+                        item["radio"],
+                        network["risk_score"],
+                        network["risk"]
+                    ])
+
+            else:
+
+                writer.writerow([
+                    network["ssid"],
+                    "",
+                    network["authentication"],
+                    network["encryption"],
+                    signal_value(network["signal"]),
+                    network["channel"],
+                    network["radio"],
+                    network["risk_score"],
+                    network["risk"]
+                ])
 
     print(
         GREEN +
-        f"\n[+] CSV report created: {CSV_REPORT}"
+        f"\n[+] Created {CSV_FILE}"
         + RESET
     )
 
 
+def export_html(networks):
+    if not networks:
+        print(YELLOW + "Perform a scan first." + RESET)
+        return
 
-# SECURITY SUMMARY
-
-
-def security_summary(networks):
-
-    high = 0
-    medium = 0
-    low = 0
-    open_networks = 0
+    rows = ""
 
     for network in networks:
 
-        if network["risk"] == "HIGH":
-            high += 1
+        rows += f"""
+        <tr>
+            <td>{network['ssid']}</td>
+            <td>{network['authentication']}</td>
+            <td>{network['encryption']}</td>
+            <td>{network['signal']}</td>
+            <td>{network['channel']}</td>
+            <td>{len(network['bssids'])}</td>
+            <td class="{network['risk'].lower()}">
+                {network['risk']}
+                ({network['risk_score']})
+            </td>
+        </tr>
+        """
 
-        elif network["risk"] == "MEDIUM":
-            medium += 1
+    html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Wi-Fi Security Report</title>
 
-        else:
-            low += 1
+<style>
 
-        if network["authentication"].lower() == "open":
+body {{
+    font-family: Arial, sans-serif;
+    background: #10141a;
+    color: #ffffff;
+    padding: 30px;
+}}
 
-            open_networks += 1
+h1 {{
+    text-align: center;
+}}
 
-    print("\n" + CYAN + "=" * 75)
-    print("SECURITY SUMMARY")
-    print("=" * 75 + RESET)
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 30px;
+}}
+
+th, td {{
+    padding: 12px;
+    border: 1px solid #303640;
+    text-align: left;
+}}
+
+th {{
+    background: #202631;
+}}
+
+tr:nth-child(even) {{
+    background: #171c24;
+}}
+
+.high {{
+    color: #ff4d4d;
+    font-weight: bold;
+}}
+
+.medium {{
+    color: #ffd24d;
+    font-weight: bold;
+}}
+
+.low {{
+    color: #55e68a;
+    font-weight: bold;
+}}
+
+.footer {{
+    margin-top: 30px;
+    text-align: center;
+    color: #8c96a5;
+}}
+
+</style>
+</head>
+
+<body>
+
+<h1>Wi-Fi Security Assessment</h1>
+
+<p>
+Generated:
+{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+</p>
+
+<p>
+Networks discovered:
+{len(networks)}
+</p>
+
+<table>
+
+<tr>
+<th>SSID</th>
+<th>Authentication</th>
+<th>Encryption</th>
+<th>Signal</th>
+<th>Channel</th>
+<th>BSSIDs</th>
+<th>Risk</th>
+</tr>
+
+{rows}
+
+</table>
+
+<div class="footer">
+Wi-Fi Security Analyzer
+</div>
+
+</body>
+</html>
+"""
+
+    with open(
+        HTML_FILE,
+        "w",
+        encoding="utf-8"
+    ) as file:
+        file.write(html)
 
     print(
-        f"\nTotal Networks : {len(networks)}"
-    )
-
-    print(
-        f"{RED}High Risk      : {high}{RESET}"
-    )
-
-    print(
-        f"{YELLOW}Medium Risk    : {medium}{RESET}"
-    )
-
-    print(
-        f"{GREEN}Low Risk       : {low}{RESET}"
-    )
-
-    print(
-        f"{RED}Open Networks  : {open_networks}{RESET}"
-    )
-
-
-
-# FULL SCAN
-
-
-def perform_scan():
-
-    print(
-        CYAN +
-        "\n[*] Scanning for nearby Wi-Fi networks..."
+        GREEN +
+        f"\n[+] Created {HTML_FILE}"
         + RESET
     )
 
-    networks = run_wifi_scan()
 
-    networks = analyze_networks(networks)
+def history():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
 
-    return networks
+    cur.execute("""
+        SELECT
+            timestamp,
+            COUNT(DISTINCT ssid),
+            AVG(signal),
+            MAX(risk_score)
+        FROM scans
+        GROUP BY timestamp
+        ORDER BY timestamp DESC
+        LIMIT 20
+    """)
+
+    records = cur.fetchall()
+
+    conn.close()
+
+    print("\n" + CYAN + "=" * 80)
+    print("SCAN HISTORY")
+    print("=" * 80 + RESET)
+
+    if not records:
+        print("No history available.")
+        return
+
+    for record in records:
+
+        timestamp, count, avg_signal, max_risk = record
+
+        print(
+            f"{timestamp} | "
+            f"Networks: {count:<3} | "
+            f"Avg Signal: {round(avg_signal or 0)}% | "
+            f"Max Risk: {max_risk}"
+        )
 
 
+def search_network(networks):
+    if not networks:
+        print(YELLOW + "Perform a scan first." + RESET)
+        return
 
-# MAIN MENU
+    query = input(
+        "\nEnter SSID search term: "
+    ).lower()
+
+    matches = [
+        n for n in networks
+        if query in n["ssid"].lower()
+    ]
+
+    if not matches:
+        print(YELLOW + "No matching networks." + RESET)
+        return
+
+    display_networks(matches)
 
 
-def main():
+def monitor():
+    print("\n" + CYAN + "=" * 70)
+    print("CONTINUOUS MONITORING")
+    print("=" * 70 + RESET)
+
+    try:
+        interval = int(
+            input("Scan interval in seconds [10]: ") or "10"
+        )
+    except ValueError:
+        interval = 10
+
+    previous = {}
+
+    try:
+
+        while True:
+
+            clear()
+            header()
+
+            networks = scan()
+
+            current = {
+                n["ssid"]: n
+                for n in networks
+            }
+
+            if previous:
+
+                new_networks = (
+                    set(current) - set(previous)
+                )
+
+                removed_networks = (
+                    set(previous) - set(current)
+                )
+
+                if new_networks:
+
+                    print(
+                        "\n" +
+                        RED +
+                        "ALERT: NEW NETWORK DETECTED"
+                        + RESET
+                    )
+
+                    for ssid in new_networks:
+                        print(f"  + {ssid}")
+
+                if removed_networks:
+
+                    print(
+                        "\n" +
+                        YELLOW +
+                        "NETWORK NO LONGER VISIBLE"
+                        + RESET
+                    )
+
+                    for ssid in removed_networks:
+                        print(f"  - {ssid}")
+
+                for ssid in set(current) & set(previous):
+
+                    old = previous[ssid]
+                    new = current[ssid]
+
+                    if (
+                        old["authentication"]
+                        !=
+                        new["authentication"]
+                    ):
+
+                        print(
+                            RED +
+                            f"\nALERT: SECURITY CHANGE - {ssid}"
+                            + RESET
+                        )
+
+                    if (
+                        old["encryption"]
+                        !=
+                        new["encryption"]
+                    ):
+
+                        print(
+                            RED +
+                            f"ALERT: ENCRYPTION CHANGE - {ssid}"
+                            + RESET
+                        )
+
+            display_networks(networks)
+
+            previous = current
+
+            print(
+                f"\nNext scan in {interval} seconds..."
+            )
+
+            time.sleep(interval)
+
+    except KeyboardInterrupt:
+
+        print(
+            GREEN +
+            "\n\n[+] Monitoring stopped."
+            + RESET
+        )
+
+
+def menu():
+    db_init()
 
     networks = []
 
     while True:
 
-        clear_screen()
+        clear()
+        header()
 
-        print_header()
-
-        print("1. Scan Wi-Fi Networks")
+        print("1. Scan Networks")
         print("2. View Networks")
-        print("3. Detailed Security Assessment")
+        print("3. Detailed Assessment")
         print("4. Channel Analysis")
-        print("5. Create Security Baseline")
-        print("6. Compare With Baseline")
-        print("7. Security Summary")
-        print("8. Export JSON Report")
-        print("9. Export CSV Report")
+        print("5. Security Summary")
+        print("6. Create Baseline")
+        print("7. Compare Baseline")
+        print("8. Continuous Monitoring")
+        print("9. Search SSID")
+        print("10. Scan History")
+        print("11. Export JSON")
+        print("12. Export CSV")
+        print("13. Export HTML Report")
         print("0. Exit")
 
-        print()
-
         choice = input(
-            "Select an option: "
+            "\nSelect option: "
         ).strip()
 
-       
-        # SCAN
-       
-
         if choice == "1":
-
-            networks = perform_scan()
-
-            display_networks(networks)
-
-            input(
-                "\nPress Enter to continue..."
-            )
-
-       
-        # VIEW
-       
+            networks = scan()
+            input("\nPress Enter to continue...")
 
         elif choice == "2":
-
             display_networks(networks)
-
-            input(
-                "\nPress Enter to continue..."
-            )
-
-       
-        # DETAILS
-       
+            input("\nPress Enter to continue...")
 
         elif choice == "3":
-
-            show_network_details(networks)
-
-            input(
-                "\nPress Enter to continue..."
-            )
-
-       
-        # CHANNEL ANALYSIS
-       
+            details(networks)
+            input("\nPress Enter to continue...")
 
         elif choice == "4":
-
-            print_channel_analysis(networks)
-
-            input(
-                "\nPress Enter to continue..."
-            )
-
-       
-        # BASELINE
-       
+            channel_analysis(networks)
+            input("\nPress Enter to continue...")
 
         elif choice == "5":
-
-            if not networks:
-
-                networks = perform_scan()
-
-            create_baseline(networks)
-
-            input(
-                "\nPress Enter to continue..."
-            )
-
-       
-        # COMPARE
-       
+            summary(networks)
+            input("\nPress Enter to continue...")
 
         elif choice == "6":
-
             if not networks:
+                networks = scan()
 
-                networks = perform_scan()
-
-            compare_baseline(networks)
-
-            input(
-                "\nPress Enter to continue..."
-            )
-
-       
-        # SUMMARY
-       
+            baseline_create(networks)
+            input("\nPress Enter to continue...")
 
         elif choice == "7":
-
             if not networks:
+                networks = scan()
 
-                networks = perform_scan()
-
-            security_summary(networks)
-
-            input(
-                "\nPress Enter to continue..."
-            )
-
-       
-        # JSON
-       
+            baseline_compare(networks)
+            input("\nPress Enter to continue...")
 
         elif choice == "8":
-
-            if not networks:
-
-                networks = perform_scan()
-
-            export_json(networks)
-
-            input(
-                "\nPress Enter to continue..."
-            )
-
-       
-        # CSV
-       
+            monitor()
+            input("\nPress Enter to continue...")
 
         elif choice == "9":
+            search_network(networks)
+            input("\nPress Enter to continue...")
 
-            if not networks:
+        elif choice == "10":
+            history()
+            input("\nPress Enter to continue...")
 
-                networks = perform_scan()
+        elif choice == "11":
+            export_json(networks)
+            input("\nPress Enter to continue...")
 
+        elif choice == "12":
             export_csv(networks)
+            input("\nPress Enter to continue...")
 
-            input(
-                "\nPress Enter to continue..."
-            )
-
-       
-        # EXIT
-       
+        elif choice == "13":
+            export_html(networks)
+            input("\nPress Enter to continue...")
 
         elif choice == "0":
-
             print(
                 GREEN +
-                "\n[+] Exiting Wi-Fi Security Analyzer."
+                "\nExiting..."
                 + RESET
             )
-
             break
 
         else:
-
             print(
                 RED +
-                "\n[-] Invalid option."
+                "\nInvalid option."
                 + RESET
             )
-
-            input(
-                "\nPress Enter to continue..."
-            )
-
-
-
-# START PROGRAM
+            time.sleep(1)
 
 
 if __name__ == "__main__":
-
-    main()
-
-    # THIS PROJECT IS ONLY MADE FOR ANALYSIS OF NETWORK AND ONLY EDUCATIONAL USE.
+    menu()
